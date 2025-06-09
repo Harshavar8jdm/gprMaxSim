@@ -1,0 +1,16 @@
+#title: B-scan - PEC Sphere in soil(variation 1)
+#domain: 1 1 0.05
+#dx_dy_dz: 0.002 0.002 0.002
+#time_window: 3e-9
+
+#material: 6 0 1 0 half_space
+
+#waveform: ricker 1 250e6 my_ricker 
+#hertzian_dipole: z 0.100 0.170 0 my_ricker
+#rx: 0.080 0.170 0
+
+#src_steps: 0.002 0 0 
+#rx_steps: 0.002 0 0
+
+#box: 0 0 0 0.240 0.170 0.002 half_space 
+#sphere: 0.060 0.060 0.001 0.004 pec
