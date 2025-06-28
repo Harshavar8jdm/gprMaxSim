@@ -4,14 +4,14 @@ import subprocess
 # --- User-defined fixed number of traces ---
 # This will be applied to ALL simulations run by this script.
 # Make sure this value aligns with how you've set up your #rx and #rx_steps in your .in files.
-FIXED_NUMBER_OF_TRACES = 200 # <--- SET YOUR DESIRED NUMBER OF TRACES HERE
+FIXED_NUMBER_OF_TRACES = 225 # <--- SET YOUR DESIRED NUMBER OF TRACES HERE
 
 # Define the directory where your generated .in files are located
-input_files_dir = "C:/Users/user/gprMax/test_user/simulations_radii_depth_test2"
+input_files_dir = "C:/Users/user/gprMax/batch_sim/simulations_full_strategy_split/split_1"
 
 # Define the directory where gprMax should save its output files
-output_results_dir = "C:/Users/user/gprMax/test_user/outputs_radii_depth_test2"
-os.makedirs(output_results_dir, exist_ok=True)
+output_results_dir = "C:/Users/user/gprMax/batch_sim/outputs_simulations_full"
+#os.makedirs(output_results_dir, exist_ok=True)
 
 # Get a list of all .in files in the input directory
 input_files = [f for f in os.listdir(input_files_dir) if f.endswith(".in")]
@@ -35,7 +35,7 @@ for i, input_filename in enumerate(input_files):
         input_filepath,
         "-n",
         str(FIXED_NUMBER_OF_TRACES),
-       "-gpu" 
+        "-gpu"
 
     ]
 
