@@ -131,3 +131,41 @@ if __name__ == "__main__":
 
     plthandle.show()
 
+
+
+
+if __name__ == "__main__":
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Plots a B-scan image.', 
+                                     usage='cd gprMax; python -m tools.plot_Bscan outputfile output')
+    parser.add_argument('outputfile', help='name of output file including path')
+    parser.add_argument('rx_component', help='name of output component to be plotted', 
+                        choices=['Ex', 'Ey', 'Ez', 'Hx', 'Hy', 'Hz', 'Ix', 'Iy', 'Iz'])
+    args = parser.parse_args()
+
+    # Open output file and read number of outputs (receivers)
+    f = h5py.File(args.outputfile, 'r')
+    nrx = f.attrs['nrx']
+    f.close()
+
+    # Check there are any receivers
+    if nrx == 0:
+        raise CmdInputError('No receivers found in {}'.format(args.outputfile))
+
+    # Create output folder
+    output_dir = os.path.join(os.getcwd(), 'saved_plots')
+    os.makedirs(output_dir, exist_ok=True)
+
+    for rx in range(1, nrx + 1):
+        outputdata, dt = get_output_data(args.outputfile, rx, args.rx_component)
+        plthandle = mpl_plot(args.outputfile, outputdata, dt, rx, args.rx_component)
+
+        # Create output filename
+        filename_base = os.path.basename(args.outputfile).replace('__merged.out', '')
+        save_path = os.path.join(output_dir, f'{filename_base}_rx{rx}_{args.rx_component}.png')
+
+        # Save the figure
+        plthandle.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"✅ Plot saved: {save_path}")
+
