@@ -18,3 +18,8 @@ Traceback (most recent call last):
 FileNotFoundError: [Errno 2] Unable to synchronously open file (unable to open file: name = 'gpr_clay_r0_05_d0_2_a15__merged.out', errno = 2, error message = 'No such file or directory', flags = 0, o_flags = 0)
 ❌ Error while processing gpr_clay_r0_05_d0_2_a15: Command '['python', '-m', 'tools.plot_Bscan', 'gpr_clay_r0_05_d0_2_a15__merged.out', 'Ez']' returned non-zero exit status 1.
 ⏩ Skipping gpr_clay_r0_05_d0_2_a90 — only 34 files found (needs 225)
+
+
+
+
+gpr_clay_r0_05_d0_2_a15__merged.out
