@@ -3,10 +3,10 @@ import math
 
 # Define parameter ranges
 radii = [round(r, 2) for r in [x / 100 for x in range(5, 85, 5)]]  # 5cm to 80cm
-depths = [round(d, 2) for d in [x / 100 for x in range(10, 510, 10)]]  # 10cm to 500cm
-angles = list(range(0, 91, 15))  # 0° to 90°
-materials = ["pec", "wet_concrete", "clay", "pvc"]
-N_SPLITS = 5  # Number of folders to split files into
+depths = [round(d, 2) for d in [x / 100 for x in range(10, 310, 10)]]  # 10cm to 3.10m
+angles = list(range(15, 76, 15))  # 15° to 60°
+
+materials = ["clay", "wet_concrete", "pec", "pvc"]  # order corresponds to splits
 
 def format_value(val):
     return str(val).replace(".", "_")
@@ -15,15 +15,17 @@ def generate_simulation_files():
     base_dir = "simulations_full_strategy_split"
     os.makedirs(base_dir, exist_ok=True)
 
-    # Create 5 subdirectories: split_1, ..., split_5
-    split_dirs = []
-    for i in range(N_SPLITS):
+    # Create split directories, one per material
+    split_dirs = {}
+    for i, material in enumerate(materials):
         split_path = os.path.join(base_dir, f"split_{i+1}")
         os.makedirs(split_path, exist_ok=True)
-        split_dirs.append(split_path)
+        split_dirs[material] = split_path  # map material to its split folder
 
     count = 0
     for material in materials:
+        folder = split_dirs[material]  # folder for this material (split)
+
         for radius in radii:
             for depth in depths:
                 for angle in angles:
@@ -37,9 +39,6 @@ def generate_simulation_files():
                     d_str = format_value(depth)
                     a_str = str(angle)
 
-                    # Determine which split folder this file should go into
-                    split_index = count % N_SPLITS
-                    folder = split_dirs[split_index]
                     filename = os.path.join(folder, f"gpr_{material}_r{r_str}_d{d_str}_a{a_str}_.in")
 
                     with open(filename, "w") as f:
@@ -64,7 +63,7 @@ def generate_simulation_files():
 
                     count += 1
 
-    print(f"Generated {count} files across {N_SPLITS} folders in '{base_dir}'")
+    print(f"Generated {count} files across {len(materials)} folders in '{base_dir}'")
 
 if __name__ == "__main__":
     generate_simulation_files()
