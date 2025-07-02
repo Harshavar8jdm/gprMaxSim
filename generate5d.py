@@ -6,7 +6,8 @@ radii = [round(r, 2) for r in [x / 100 for x in range(5, 85, 5)]]  # 5cm to 80cm
 depths = [round(d, 2) for d in [x / 100 for x in range(10, 310, 10)]]  # 10cm to 3.10m
 angles = list(range(15, 76, 15))  # 15° to 60°
 
-materials = ["clay", "wet_concrete", "pec", "pvc"]  # order corresponds to splits
+materials = ["clay", "wet_concrete", "pec", "pvc", "dry_soil", "moist_soil", "silty_soil", 
+                "loamy_soil", "wet_loam", "peat_soil"]  # order corresponds to splits
 
 def format_value(val):
     return str(val).replace(".", "_")
@@ -18,7 +19,7 @@ def generate_simulation_files():
     # Create split directories, one per material
     split_dirs = {}
     for i, material in enumerate(materials):
-        split_path = os.path.join(base_dir, f"split_{i+1}")
+        split_path = os.path.join(base_dir, f"split_{material}")
         os.makedirs(split_path, exist_ok=True)
         split_dirs[material] = split_path  # map material to its split folder
 
@@ -45,13 +46,20 @@ def generate_simulation_files():
                         f.write(f"#title: Material={material}, Radius={radius}, Depth={depth}, Angle={angle}\n")
                         f.write("#domain: 15 11 0.002\n")
                         f.write("#dx_dy_dz: 0.0075 0.0075 0.002\n")
-                        f.write("#time_window: 50e-9\n\n")
+                        f.write("#time_window: 60e-9\n\n")
                         f.write("#pml_cells: 10 5 0 5 5 0\n\n")
                         f.write("#material: 6 0 1 0 half_space\n")
                         f.write("#material: 1 0 1 0 air\n")
                         f.write("#material: 9 0 1 0 wet_concrete\n")
                         f.write("#material: 30 0 1 0 clay\n")
                         f.write("#material: 3.8 10e-6 1 0 pvc\n")
+                        f.write("#material: 3.03 0.0003 1 0 dry_soil\n")
+                        f.write("#material: 7.45 0.015 1 0 moist_soil\n")
+                        f.write("#material: 13.28 0.04 1 0 silty_soil\n")
+                        f.write("#material: 10.12 0.03 1 0 loamy_soil\n")
+                        f.write("#material: 25.2 0.08 1 0 wet_loam\n")
+                        f.write("#material: 70 0.15 1 0 peat_soil\n")
+
                         f.write("#waveform: ricker 1 500e6 my_ricker\n")
                         f.write("#hertzian_dipole: z 0.2 0.170 0 my_ricker\n")
                         f.write("#rx: 0.40 0.170 0\n")
