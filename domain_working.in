@@ -1,8 +1,8 @@
 #title: B-scan from a metal cylinder buried in a dielectric half-space
 #domain: 15 11 0.002
-#dx_dy_dz: 0.0075 0.0075 0.002
-#time_window: 10e-9
-#pml_cells: 0 0 0 0 0 0
+#dx_dy_dz: 0.005 0.005 0.002
+#time_window: 55e-9
+#pml_cells: 10 5 0 5 5 0
 
 #material: 6 0 1 0 half_space
 
