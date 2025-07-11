@@ -3,27 +3,513 @@ import os
 import subprocess
 import threading
 import re
+import h5py
 import shutil
 import time 
+import webbrowser 
 from de.runl import GPRMaxInputGenerator
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QFileDialog, QMessageBox,
     QPlainTextEdit, QTabWidget, QAction, QInputDialog, QVBoxLayout, QWidget,
     QToolBar, QSplitter, QFileSystemModel, QTreeView, QLineEdit, QLabel, QHBoxLayout,
     QDialog, QDialogButtonBox, QFormLayout, QComboBox, QPushButton, QCheckBox, QMenu, QAbstractItemView,
-    QTableWidget, QTableWidgetItem
+    QTableWidget, QTableWidgetItem, QListWidget, QSlider, QToolTip, QTextEdit, QCompleter, QWidget
 )
-from PyQt5.QtGui import QFont, QPixmap, QIcon, QTextCharFormat, QColor, QSyntaxHighlighter
-from PyQt5.QtCore import Qt, QDir, QObject, pyqtSignal
+from PyQt5.QtGui import (QFont, QPixmap, QIcon, QTextCharFormat, QColor, QSyntaxHighlighter, QTextCursor,QKeySequence 
+                        ,QPainter, QTextFormat, QCursor
+                        )
+from PyQt5.QtCore import Qt, QDir, QObject, pyqtSignal, QTimer, QStringListModel, QSize, QRect, QPoint
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import numpy as np
 
+class BatchRunDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Batch Simulation Runner")
+        self.setMinimumSize(600, 400)
+
+        self.file_list = QListWidget()
+
+        add_btn = QPushButton("Add .in Files")
+        add_btn.clicked.connect(self.add_files)
+
+        clear_btn = QPushButton("Clear")
+        clear_btn.clicked.connect(self.file_list.clear)
+
+        self.n_input = QLineEdit("1")
+        self.gpu_check = QCheckBox("Use GPU")
+        self.mpi_check = QCheckBox("Enable MPI")
+        self.mpi_input = QLineEdit("")
+        self.no_spawn_check = QCheckBox("--mpi-no-spawn")
+
+        self.mpi_check.stateChanged.connect(self.toggle_mpi)
+
+        run_btn = QPushButton("Run All")
+        run_btn.clicked.connect(self.run_all)
+
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Selected .in Files:"))
+        layout.addWidget(self.file_list)
+
+        file_controls = QHBoxLayout()
+        file_controls.addWidget(add_btn)
+        file_controls.addWidget(clear_btn)
+        layout.addLayout(file_controls)
+
+        layout.addWidget(QLabel("Number of models (-n):"))
+        layout.addWidget(self.n_input)
+        layout.addWidget(self.gpu_check)
+        layout.addWidget(self.mpi_check)
+        layout.addWidget(QLabel("MPI Processes:"))
+        layout.addWidget(self.mpi_input)
+        layout.addWidget(self.no_spawn_check)
+        layout.addWidget(run_btn)
+
+        self.setLayout(layout)
+        self.commands = []
+
+    def toggle_mpi(self):
+        enabled = self.mpi_check.isChecked()
+        self.mpi_input.setEnabled(enabled)
+        self.no_spawn_check.setEnabled(enabled)
+
+    def add_files(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Select .in Files", "", "Input Files (*.in)")
+        for f in files:
+            if f not in [self.file_list.item(i).text() for i in range(self.file_list.count())]:
+                self.file_list.addItem(f)
+
+    def run_all(self):
+        from subprocess import Popen
+
+        if self.file_list.count() == 0:
+            QMessageBox.warning(self, "No Files", "Please add at least one .in file.")
+            return
+
+        n = self.n_input.text().strip()
+        gpu = self.gpu_check.isChecked()
+        use_mpi = self.mpi_check.isChecked()
+        mpi_n = self.mpi_input.text().strip()
+        no_spawn = self.no_spawn_check.isChecked()
+
+        self.commands.clear()
+
+        for i in range(self.file_list.count()):
+            file_path = self.file_list.item(i).text()
+            cmd = f"python -m gprMax \"{file_path}\" -n {n}"
+            if gpu:
+                cmd += " --gpu"
+            if use_mpi and mpi_n.isdigit():
+                cmd += f" -mpi {mpi_n}"
+                if no_spawn:
+                    cmd += " --mpi-no-spawn"
+            self.commands.append(cmd)
+            Popen(cmd, shell=True)
+
+        QMessageBox.information(self, "Batch Started", "All simulations have been started.")
+
+class OutputDataViewer(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("GPR Output Data Viewer")
+        self.setMinimumSize(800, 600)
+
+        self.file_label = QLabel("No file loaded")
+        self.load_btn = QPushButton("Load .h5 File")
+        self.load_btn.clicked.connect(self.load_file)
+
+        self.component_box = QComboBox()
+        self.component_box.addItems(["Ez", "Ex", "Ey", "Hx", "Hy", "Hz"])
+        self.component_box.currentIndexChanged.connect(self.update_plot)
+
+        self.trace_slider = QSlider(Qt.Horizontal)
+        self.trace_slider.setMinimum(0)
+        self.trace_slider.setTickInterval(1)
+        self.trace_slider.valueChanged.connect(self.update_plot)
+
+        self.canvas = FigureCanvas(Figure(figsize=(6, 4)))
+        self.ax = self.canvas.figure.add_subplot(111)
+
+        top_layout = QHBoxLayout()
+        top_layout.addWidget(self.load_btn)
+        top_layout.addWidget(self.component_box)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.file_label)
+        layout.addLayout(top_layout)
+        layout.addWidget(self.trace_slider)
+        layout.addWidget(self.canvas)
+
+        self.setLayout(layout)
+
+        self.data = None
+        self.time = None
+
+    def load_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select .h5 File", "", "HDF5 Files (*.h5)")
+        if path:
+            self.file_label.setText(path)
+            try:
+                with h5py.File(path, 'r') as f:
+                    self.time = f['time'][:]
+                    self.data = {
+                        'Ex': f['rxs/rx1/Ex'][:],
+                        'Ey': f['rxs/rx1/Ey'][:],
+                        'Ez': f['rxs/rx1/Ez'][:],
+                        'Hx': f['rxs/rx1/Hx'][:],
+                        'Hy': f['rxs/rx1/Hy'][:],
+                        'Hz': f['rxs/rx1/Hz'][:]
+                    }
+                    self.trace_slider.setMaximum(self.data['Ez'].shape[0] - 1)
+                    self.trace_slider.setValue(0)
+                    self.update_plot()
+            except Exception as e:
+                self.file_label.setText(f"Error loading file: {e}")
+
+    def update_plot(self):
+        if self.data is None:
+            return
+
+        component = self.component_box.currentText()
+        index = self.trace_slider.value()
+
+        signal = self.data[component][index]
+
+        self.ax.clear()
+        self.ax.plot(self.time * 1e9, signal)
+        self.ax.set_title(f"A-Scan Trace #{index+1} - {component}")
+        self.ax.set_xlabel("Time (ns)")
+        self.ax.set_ylabel("Amplitude")
+        self.canvas.draw()
+
+class GPRCompleter(QCompleter):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        keywords = [
+            "#title", "#domain", "#dx_dy_dz", "#time_window",
+            "#material", "#waveform", "#rx", "#hertzian_dipole",
+            "#snapshot", "#box", "#cylinder", "#sphere", "#include",
+            "#outputfile", "#geometry_view", "#messages", "#end_python"
+        ]
+        self.setModel(QStringListModel(keywords))
+        self.setCaseSensitivity(False)
+        self.setFilterMode(Qt.MatchContains)
+
+class LineNumberArea(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.code_editor = editor
+
+    def sizeHint(self):
+        return self.code_editor.line_number_area_size()
+
+    def paintEvent(self, event):
+        self.code_editor.line_number_area_paint(event)
+
+class FloatingTooltip(QWidget):
+    def __init__(self):
+        super().__init__(None, Qt.ToolTip)
+        self.label = QLabel("", self)
+        self.label.setStyleSheet("""
+            background-color: #ffffe0;
+            color: black;
+            border: 1px solid gray;
+            padding: 4px;
+            font-size: 10pt;
+        """)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.hide)
+
+    def show_tooltip(self, text, pos):
+        self.label.setText(text)
+        self.label.adjustSize()
+        self.resize(self.label.size())
+        self.move(pos)
+        self.show()
+        self.raise_()
+        self.timer.start(3000)
+
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QComboBox, QTextEdit, QPushButton, QDialogButtonBox
+
+class TemplateLibraryDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Insert Input Template")
+        self.setFixedSize(500, 400)
+
+        self.templates = {
+            "Basic Ricker Dipole": """#title: Basic Ricker Setup
+#domain: 1.0 1.0 1.0
+#dx_dy_dz: 0.01 0.01 0.01
+#time_window: 5e-9
+#material: 0 1 0 0
+#waveform: ricker 1.0e9
+#hertzian_dipole: z 0.5 0.5 0.5
+#rx: 0.6 0.5 0.5
+#snapshot: 0.5
+#geometry_view: 1""",
+
+            "Box in Dielectric Halfspace": """#title: Box in dielectric
+#domain: 2.0 1.0 1.0
+#dx_dy_dz: 0.01 0.01 0.01
+#time_window: 6e-9
+#material: 0 4 0 0
+#material: 1 6 0 0
+#waveform: ricker 1.0e9
+#hertzian_dipole: z 0.5 0.1 0.1
+#rx: 0.6 0.1 0.1
+#box: 1 0.9 0.3 0.1 0.5 0.3
+#geometry_view: 1""",
+
+            "B-scan with Cylinder Targets": """#title: Cylinder B-scan
+#domain: 3.0 1.0 1.0
+#dx_dy_dz: 0.01 0.01 0.01
+#time_window: 7e-9
+#material: 0 9 0 0
+#material: 1 3 0 0
+#waveform: ricker 1.0e9
+#src_steps: 100
+#rx_steps: 100
+#hertzian_dipole: z 0.1 0.5 0.5
+#rx: 0.2 0.5 0.5
+#cylinder: 1 1.0 0.5 0.5 0.1 z
+#geometry_view: 1"""
+        }
+
+        self.combo = QComboBox()
+        self.combo.addItems(self.templates.keys())
+        self.combo.currentTextChanged.connect(self.update_preview)
+
+        self.preview = QTextEdit()
+        self.preview.setReadOnly(True)
+
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout()
+        layout.addWidget(self.combo)
+        layout.addWidget(self.preview)
+        layout.addWidget(self.buttons)
+        self.setLayout(layout)
+
+        self.update_preview(self.combo.currentText())
+
+    def update_preview(self, template_name):
+        self.preview.setPlainText(self.templates.get(template_name, ""))
+
+    def get_template(self):
+        return self.preview.toPlainText().strip()
+
+class CodeEditor(QPlainTextEdit):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.tooltip = FloatingTooltip()
+        self.setMouseTracking(True)
+
+        self.line_number_area = LineNumberArea(self)
+        self.blockCountChanged.connect(self.update_line_number_area_width)
+        self.updateRequest.connect(self.update_line_number_area)
+        self.cursorPositionChanged.connect(self.highlight_current_line)
+        self.update_line_number_area_width(0)
+
+        self.directives = {
+            "#title": "Sets the title of the simulation.",
+            "#domain": "Defines the physical size of the simulation domain.",
+            "#dx_dy_dz": "Sets the grid spacing in x, y, z directions.",
+            "#time_window": "Sets total simulation time window.",
+            "#material": "Defines a material with relative permittivity, conductivity, etc.",
+            "#waveform": "Defines a waveform, e.g. ricker, gaussian.",
+            "#hertzian_dipole": "Places a Hertzian dipole source in the model.",
+            "#rx": "Defines a receiver location.",
+            "#box": "Adds a box-shaped object to geometry.",
+            "#cylinder": "Adds a cylinder-shaped object to geometry.",
+            "#snapshot": "Captures field snapshots for VTK output.",
+            "#geometry_view": "Renders the geometry view output.",
+        }
+
+
+        # Search bar
+        self.search_box = QLineEdit(self)
+        self.search_box.setPlaceholderText("Search...")
+        self.search_box.setVisible(False)
+        self.search_box.setFixedHeight(24)
+        self.search_box.returnPressed.connect(self.search_next)
+
+        self.search_box.setParent(self)
+        self.search_box.move(10, 10)  # adjust as needed
+        self.search_box.setVisible(False)
+        self.viewport().setMouseTracking(True)
+
+        # Autocomplete
+        self.completer = GPRCompleter(self)
+        self.completer.setWidget(self)
+        self.completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.completer.activated.connect(self.insert_completion)
+
+        
+
+    def keyPressEvent(self, event):
+        # Search bar toggle
+        if event == QKeySequence.Find:
+            self.search_box.setVisible(True)
+            self.search_box.setFocus()
+            return
+        elif event.key() == Qt.Key_Escape:
+            self.search_box.setVisible(False)
+            self.setFocus()
+            self.setExtraSelections([])
+            return
+
+        # Autocomplete confirm with Tab/Enter
+        if self.completer.popup().isVisible():
+            if event.key() in (Qt.Key_Enter, Qt.Key_Return, Qt.Key_Tab):
+                event.ignore()
+                self.insert_completion(self.completer.currentCompletion())
+                return
+
+        # Default behavior
+        super().keyPressEvent(event)
+
+        # Trigger autocomplete
+        cursor = self.textCursor()
+        cursor.select(QTextCursor.WordUnderCursor)
+        prefix = cursor.selectedText()
+
+        if len(prefix) < 1:
+            self.completer.popup().hide()
+            return
+
+        self.completer.setCompletionPrefix(prefix)
+        rect = self.cursorRect()
+        rect.setWidth(self.completer.popup().sizeHintForColumn(0) + 10)
+        self.completer.complete(rect)
+    
+
+    def mouseMoveEvent(self, event):
+        cursor = self.cursorForPosition(event.pos())
+        cursor.select(QTextCursor.WordUnderCursor)
+        word = cursor.selectedText()
+
+        if word and word.startswith("#") and word in self.directives:
+            text = self.directives[word]
+            self.tooltip.show_tooltip(text, QCursor.pos() + QPoint(10, 20))
+        else:
+            self.tooltip.hide()
+
+        super().mouseMoveEvent(event)
+
+
+
+    def line_number_area_size(self):
+        digits = len(str(self.blockCount()))
+        space = 10 + self.fontMetrics().width('9') * digits
+        return QSize(space, 0)
+
+    def update_line_number_area_width(self, _):
+        self.setViewportMargins(self.line_number_area_size().width(), 0, 0, 0)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QRect(cr.left(), cr.top(), self.line_number_area_size().width(), cr.height())
+        )
+
+    def line_number_area_paint(self, event):
+        painter = QPainter(self.line_number_area)
+
+        block = self.firstVisibleBlock()
+        blockNumber = block.blockNumber()
+        top = self.blockBoundingGeometry(block).translated(self.contentOffset()).top()
+        bottom = top + self.blockBoundingRect(block).height()
+        font_height = self.fontMetrics().height()
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(blockNumber + 1)
+                painter.setPen(Qt.black)
+                painter.drawText(
+                    0, int(top), self.line_number_area.width(), font_height,
+                    Qt.AlignRight, number
+                )
+            block = block.next()
+            top = bottom
+            bottom = top + self.blockBoundingRect(block).height()
+            blockNumber += 1
+
+    def update_line_number_area(self, rect, dy):
+        if dy:
+            self.line_number_area.scroll(0, dy)
+        else:
+            self.line_number_area.update(0, rect.y(), self.line_number_area.width(), rect.height())
+        if rect.contains(self.viewport().rect()):
+            self.update_line_number_area_width(0)
+
+    def highlight_current_line(self):
+        extraSelections = []
+        if not self.isReadOnly():
+            selection = QTextEdit.ExtraSelection()
+            selection.format.setBackground(QColor(235, 235, 255))  # light blue
+            selection.format.setProperty(QTextFormat.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            extraSelections.append(selection)
+        self.setExtraSelections(extraSelections)
+
+
+    def insert_completion(self, completion):
+        cursor = self.textCursor()
+        cursor.select(QTextCursor.WordUnderCursor)
+        cursor.removeSelectedText()
+        cursor.insertText(completion)
+        self.setTextCursor(cursor)
+
+    def search_next(self):
+        text = self.search_box.text().strip()
+        if not text:
+            self.setExtraSelections([])
+            return
+
+        self.highlight_all_matches(text)
+
+        cursor = self.textCursor()
+        found = self.document().find(text, cursor.position())
+        if not found.isNull():
+            found.setPosition(found.selectionStart())
+            self.setTextCursor(found)
+        else:
+            found = self.document().find(text, 0)
+            if not found.isNull():
+                found.setPosition(found.selectionStart())
+                self.setTextCursor(found)
+
+    def highlight_all_matches(self, text):
+        if not text:
+            self.setExtraSelections([])
+            return
+
+        selections = []
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("yellow"))
+
+        cursor = self.document().find(text, 0)
+        while not cursor.isNull():
+            sel = QTextEdit.ExtraSelection()
+            sel.cursor = cursor
+            sel.format = fmt
+            selections.append(sel)
+            cursor = self.document().find(text, cursor.position() + 1)
+
+        self.setExtraSelections(selections)
 
 class FileTab(QWidget):
     def __init__(self, filepath=None):
         super().__init__()
-        self.editor = QPlainTextEdit()
+        self.editor = CodeEditor()
         self.editor.setFont(QFont("Consolas", 11))
 
         layout = QVBoxLayout()
@@ -66,6 +552,8 @@ class FileTab(QWidget):
             if self.is_modified():
                 name = "● " + name
             parent.setTabText(index, name)
+
+
 
 class MaterialLibraryDialog(QDialog):
     def __init__(self):
@@ -118,6 +606,97 @@ class MaterialLibraryDialog(QDialog):
                 self.accept()
         else:
             QMessageBox.warning(self, "No Selection", "Please select a material.")
+
+class GPRInputValidator:
+    REQUIRED_KEYWORDS = [
+        "#title", "#domain", "#dx_dy_dz", "#time_window",
+        "#material", "#waveform", "#hertzian_dipole", "#rx"
+    ]
+
+    TOOLTIP_TEXTS = {
+        "#title": "Short description of the simulation.",
+        "#domain": "Size of the simulation domain (x y z in meters).",
+        "#dx_dy_dz": "Grid resolution in x y z (m). Fine grid = more accuracy.",
+        "#time_window": "Simulation duration in seconds.",
+        "#material": "Defines permittivity, conductivity, and other material props.",
+        "#waveform": "Waveform type, e.g. ricker, sine, gaussiandot.",
+        "#hertzian_dipole": "Electromagnetic source emitter.",
+        "#rx": "Receiver to capture field data.",
+        "#snapshot": "Snapshot field output to .vtk format."
+    }
+
+    def __init__(self, editor):
+        self.editor = editor
+        self.tooltip_timer = QTimer()
+        self.tooltip_timer.setSingleShot(True)
+        self.tooltip_timer.timeout.connect(self.show_tooltip)
+        self.editor.cursorPositionChanged.connect(self.schedule_tooltip)
+
+    def schedule_tooltip(self):
+        self.tooltip_timer.start(200)
+
+    def show_tooltip(self):
+        cursor = self.editor.textCursor()
+        cursor.select(QTextCursor.LineUnderCursor)
+        line = cursor.selectedText().strip()
+
+        for keyword, tip in self.TOOLTIP_TEXTS.items():
+            if line.startswith(keyword):
+                pos = self.editor.cursorRect(cursor).bottomRight()
+                global_pos = self.editor.mapToGlobal(pos)
+                QToolTip.showText(global_pos, tip, self.editor)
+                return
+        QToolTip.hideText()
+
+    def validate(self):
+        text = self.editor.toPlainText()
+        issues = []
+
+        for keyword in self.REQUIRED_KEYWORDS:
+            if not re.search(rf"^{keyword}", text, re.MULTILINE):
+                issues.append(f"Missing required keyword: {keyword}")
+
+        if "#snapshot" not in text:
+            issues.append("No #snapshot found (optional, but useful for VTK output)")
+
+        match = re.search(r"#dx_dy_dz:\s+([\d\.eE]+)\s+([\d\.eE]+)\s+([\d\.eE]+)", text)
+        if match:
+            dx, dy, dz = map(float, match.groups())
+            if max(dx, dy, dz) > 0.01:
+                issues.append("Grid spacing may be too coarse for accurate results.")
+
+        if not re.search(r"#time_window:\s+[\d\.eE]+", text):
+            issues.append("Missing or malformed #time_window.")
+
+        if issues:
+            QMessageBox.warning(self.editor.parent(), "Input File Validation", "\n".join(issues))
+        else:
+            QMessageBox.information(self.editor.parent(), "Input File Validation", "No critical issues found!")
+
+    def validate(self):
+        text = self.editor.toPlainText()
+        issues = []
+
+        for keyword in self.REQUIRED_KEYWORDS:
+            if not re.search(rf"^{keyword}", text, re.MULTILINE):
+                issues.append(f"Missing required keyword: {keyword}")
+
+        if "#snapshot" not in text:
+            issues.append("No #snapshot found (optional, but useful for VTK output)")
+
+        if match := re.search(r"#dx_dy_dz:\\s+([\\d\\.eE]+)\\s+([\\d\\.eE]+)\\s+([\\d\\.eE]+)", text):
+            dx, dy, dz = map(float, match.groups())
+            if max(dx, dy, dz) > 0.01:
+                issues.append("Grid spacing (dx, dy, dz) may be too coarse for accurate results.")
+
+        if not re.search(r"#time_window:\\s+[\\d\\.eE]+", text):
+            issues.append("Missing or malformed #time_window.")
+
+        if issues:
+            QMessageBox.warning(self.editor.parent(), "Input File Validation", "\\n".join(issues))
+        else:
+            QMessageBox.information(self.editor.parent(), "Input File Validation", "No critical issues found!")
+
 
 class WaveformVisualizerDialog(QDialog):
     def __init__(self):
@@ -791,6 +1370,7 @@ class GPRViewer(QMainWindow):
         self.convert_png_action = QAction("PNG to HDF5", self)
         self.convert_png_action.triggered.connect(self.convert_png_to_h5)
 
+
     def cut_file(self, path):
         self.clipboard_action = 'cut'
         self.clipboard_path = path
@@ -908,10 +1488,23 @@ class GPRViewer(QMainWindow):
         file_menu.addAction(self.open_folder_action)
         file_menu.addAction(self.save_action)
 
+        open_examples_action = QAction("Examples", self)
+        open_examples_action.triggered.connect(self.open_examples_folder)
+        file_menu.addAction(open_examples_action)
+
         # Run menu
         run_menu = menubar.addMenu("Run")
         run_menu.addAction(self.run_action)
         run_menu.addAction(self.set_n_action)
+
+        help_menu = self.menuBar().addMenu("Help")
+        gprmax_docs_action = QAction("GPRMax Documentation", self)
+        gprmax_docs_action.triggered.connect(lambda: webbrowser.open("https://docs.gprmax.com/en/latest/"))
+        help_menu.addAction(gprmax_docs_action)
+
+        github_action = QAction("GPRMax GitHub Repository", self)
+        github_action.triggered.connect(lambda: webbrowser.open("https://github.com/gprMax/gprMax"))
+        help_menu.addAction(github_action)
 
         # Tools menu
         tools_menu = menubar.addMenu("Tools")
@@ -923,6 +1516,11 @@ class GPRViewer(QMainWindow):
         toggle_theme_action.triggered.connect(self.toggle_dark_mode)
         tools_menu.addAction(toggle_theme_action)
 
+        template_action = QAction("Insert Input Template", self)
+        template_action.triggered.connect(self.insert_template)
+        tools_menu.addAction(template_action)
+
+
         # GPRPy menu
         gprpy_menu = menubar.addMenu("GPRPy")
         gprpy_action = QAction("Launch GPRPy App", self)
@@ -932,10 +1530,40 @@ class GPRViewer(QMainWindow):
         waveform_action = QAction("Waveform Visualizer", self)
         waveform_action.triggered.connect(self.open_waveform_dialog)
         tools_menu.addAction(waveform_action)
-    
+
+        batch_run_action = QAction("Batch Run Manager", self)
+        batch_run_action.triggered.connect(self.open_batch_run_dialog)
+        tools_menu.addAction(batch_run_action)
+
+        viewer_action = QAction("Output Data Viewer", self)
+        viewer_action.triggered.connect(self.open_output_data_viewer)
+        tools_menu.addAction(viewer_action)
+
+        validate_action = QAction("Validate .in File", self)
+        validate_action.triggered.connect(self.validate_input_file)
+        tools_menu.addAction(validate_action)
+
+    def validate_input_file(self):
+        current_tab = self.tabs.currentWidget()
+        if current_tab and hasattr(current_tab, "editor"):
+            validator = GPRInputValidator(current_tab.editor)
+            validator.validate()
+
     def open_waveform_dialog(self):
         dlg = WaveformVisualizerDialog()
         dlg.exec_()
+
+    def open_output_data_viewer(self):
+        dlg = OutputDataViewer()
+        dlg.exec_()
+    
+    def insert_template(self):
+        dialog = TemplateLibraryDialog()
+        if dialog.exec_() == QDialog.Accepted:
+            template_code = dialog.get_template()
+            current_tab = self.tabs.currentWidget()
+            if hasattr(current_tab, "editor"):
+                current_tab.editor.setPlainText(template_code)
 
 
     def launch_gprpy_app(self):
@@ -1059,6 +1687,7 @@ class GPRViewer(QMainWindow):
                 index = self.tabs.currentIndex()
                 self.tabs.setTabText(index, os.path.basename(path))
                 QMessageBox.information(self, "Saved", f"File saved at:\n{path}")
+
 
     def close_tab(self, index):
         tab = self.tabs.widget(index)
@@ -1353,6 +1982,42 @@ class GPRViewer(QMainWindow):
             self.tabs.addTab(tab, os.path.basename(path))
             self.tabs.setCurrentWidget(tab)
     
+    def open_batch_run_dialog(self):
+        dlg = BatchRunDialog()
+        dlg.exec_()
+    
+    def open_examples_folder(self):
+        try:
+            # Check standard gprMax install path
+            import gprMax
+            venv_path = os.path.dirname(gprMax.__file__)
+            default_examples = os.path.join(venv_path, "user_models")
+
+            # Fallback 1: Relative to current working dir
+            local_clone = os.path.abspath(os.path.join(os.getcwd(), "user_models"))
+
+            # Fallback 2: Common path you might have locally
+            harsha_path = r"C:\Users\Harsha\gprMax\user_models"
+
+            if os.path.exists(default_examples):
+                target = default_examples
+            elif os.path.exists(local_clone):
+                target = local_clone
+            elif os.path.exists(harsha_path):
+                target = harsha_path
+            else:
+                raise FileNotFoundError("Could not locate user_models folder.")
+
+            # Open the target directory
+            if os.name == "nt":
+                subprocess.Popen(f'explorer "{target}"')
+            elif os.name == "posix":
+                subprocess.Popen(["xdg-open", target])
+            else:
+                subprocess.Popen(["open", target])
+        except Exception as e:
+            QMessageBox.critical(self, "Examples Folder Error", str(e))
+    
     def convert_png_to_h5(self):
         dialog = PNGtoH5Dialog()
         if dialog.exec_() == QDialog.Accepted:
@@ -1375,3 +2040,4 @@ if __name__ == "__main__":
     viewer = GPRViewer()
     viewer.show()
     sys.exit(app.exec_())
+    
