@@ -10,7 +10,8 @@ Install dependencies:
 
 1. Create a virtual environment:
     For Windows:
-
+    python -m venv .venv
+    
      Activate virtual environment (Command Prompt):
     .venv\Scripts\activate.bat
 
@@ -30,11 +31,11 @@ Install dependencies:
 
  How to run the app:
     Linux:
-    source .venv/bin/activate      # Activate virtual environment
-    python3 G-Augment.py           # Run the application
+    source .venv/bin/activate          # Activate virtual environment
+    python3 G-Augment.py               # Run the application
 
     Windows:
-    #<venv_name>\Scripts\activate.bat  # Activate virtual environment
+    .venv\Scripts\activate.bat         # Activate virtual environment
     python3 G-Augment.py               # Run the application
 
  What it does:
